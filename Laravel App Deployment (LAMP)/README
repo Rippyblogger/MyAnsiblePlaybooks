@@ -1,5 +1,11 @@
 #INSTRUCTIONS
 
+This playbook sets up a LAMP server to deploy a Laravel application.
+
+Core elements include Apache, MySQL(MariaDB), PHP, Certbot forr SSL and a Postgresql installation and setup.
+
+
+
 The following variables are required to make this playbook work. Adding them here to avoid stress down the line.
 
 remoteuser
