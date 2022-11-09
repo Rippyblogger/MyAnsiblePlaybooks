@@ -1,0 +1,347 @@
+---
+- name: Playbook to fully deploy a Laravel application
+  hosts: deployment_Server
+  remote_user: {{remoteuser}}
+  become: true
+  tasks:
+
+    - name: Update apt repo and cache on deployment server
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+    - name: Change timezone
+      timezone:
+        name: Africa/Lagos
+
+    - name: Upgrade all packages on servers
+      apt: upgrade=dist force_apt_get=yes
+
+    - name: Install ca-certificates apt-transport-https software-properties-common
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - ca-certificates
+        - apt-transport-https
+        - software-properties-common
+        - lsb-release
+        - gnupg2
+
+    - name: Add php packages
+      shell:
+        cmd: |
+          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
+          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/sury-php.list
+          curl -fsSL  https://packages.sury.org/php/apt.gpg| sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sury-keyring.gpg
+
+    - name: Update packages
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+
+    - name: Install Apache, PHP7 and dependencies
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - apache2
+        - libapache2-mod-php
+        - php8.1
+        - php8.1-dev
+        - php8.1-zip
+        - php8.1-curl
+        - php8.1-mbstring
+        - php8.1-mysql
+        - php8.1-gd
+        - php8.1-xml
+        - php-pgsql
+        - git
+        - zip
+        - unzip
+        - curl
+        - php-curl
+        - acl
+        - openssl
+        - python3
+        - python3-venv
+        - libaugeas0
+        - libapache2-mod-security2
+        - firewalld
+
+    - name: enable firewalld service
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Add FirewallD rules
+      firewalld:
+        permanent: yes
+        immediate: yes
+        service: "{{ item }}"
+        state: enabled
+      with_items:
+        - http
+        - https
+        - ssh
+        - postgresql
+        - mysql
+
+    - name: start and enable apache2 service
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Installing Mysql  and dependencies
+      package:
+       name: "{{item}}"
+       state: present
+       update_cache: yes
+      loop:
+        - mariadb-server
+        - python3-pymysql
+      become: yes
+
+    - name: start and enable mysql service
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Set password for root user
+      mysql_user:
+        name: "{{db_user}}"
+        password: "{{db_pass}}"
+        priv: '*.*:ALL,GRANT'
+        host: 'localhost'
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        check_implicit_admin: true
+        state: present
+
+    - name: creating examprojectdb
+      mysql_db:
+        name: "{{db_name}}"
+        login_user: "{{db_user}}"
+        login_password: "{{db_pass}}"
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Restart mysql
+      service:
+        name: mariadb
+        state: restarted
+
+    - name: download composer installer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/composer
+
+    - name: install composer
+      shell: php /tmp/composer --install-dir=/usr/local/bin
+
+    - name: rename composer executable
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+
+    - name: set permissions for composer file
+      file:
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+
+    - name: clone laravel code
+      git:
+        repo: https://github.com/f1amy/laravel-realworld-example-app.git
+        dest: /var/www/html/myapp
+        force: yes
+
+    - name: take ownership of myapp folder
+      file:
+        path: /var/www/html/myapp
+        owner: "{{new_app_user}}"
+        group: "{{new_app_group}}"
+        recurse: yes
+      become: yes
+
+    - name: copy env file
+      copy:
+        src: /var/www/html/myapp/.env.example
+        remote_src: yes
+        dest: /var/www/html/myapp/.env
+        owner: "{{ new_app_user }}"
+        group: "{{ new_app_group }}"
+        mode: '0644'
+      become: yes
+
+    - name: set APP_NAME
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^APP_NAME=' line=APP_NAME="myapp"
+      become: yes
+
+    - name: set APP_URL
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^APP_URL=' line=APP_URL=http://54.84.77.133
+      become: yes
+
+    - name: set DB_CONNECTION
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_CONNECTION=' line=DB_CONNECTION=mysql
+      become: yes
+
+    - name: set DB_HOST
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_HOST=' line=DB_HOST=mysql
+
+    - name: set DB_PORT
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_PORT=' line=DB_PORT=3306
+
+    - name: set DB_DATABASE
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_DATABASE=' line=DB_DATABASE=examprojectdb
+
+    - name: Add DB socket to configuration
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_PASSWORD' insertafter='^DB_PASSWORD' line=DB_SOCKET=/run/mysqld/mysqld.sock
+
+    - name: set DB_USERNAME
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_USERNAME=' line=DB_USERNAME={{db_user}}
+
+    - name: set DB_PASSWORD
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^DB_PASSWORD=' line=DB_PASSWORD={{db_pass}}
+
+    - name: Download and installs all libs and dependencies outlined in the /path/to/project/composer.lock
+      composer:
+        command: install
+        working_dir: /var/www/html/myapp/
+      become: yes
+      become_user: www-data
+
+    - name: Download and installs all libs and dependencies outlined in the /path/to/project/composer.lock
+      shell: composer install
+      become_user: www-data
+      args:
+        chdir: /var/www/html/myapp/
+
+
+    - name: Run artisan key generate
+      shell: php artisan key:generate
+      become: yes
+      args:
+        chdir: /var/www/html/myapp/
+
+    - name: Run artisan config cache
+      shell: |
+        php artisan config:cache
+      become: yes
+      args:
+        chdir: /var/www/html/myapp/
+
+    - name: Run artisan migrate fresh
+      shell: |
+        php artisan migrate:fresh
+      become: yes
+      args:
+        chdir: /var/www/html/myapp/
+
+    - name: Run artisan migrate seed
+      shell: |
+        php artisan migrate --seed
+      become: yes
+      args:
+        chdir: /var/www/html/myapp/
+
+    - name: edit routes file and remove opening comment
+      lineinfile: dest=/var/www/html/myapp/routes/web.php regexp='^\/\*Route' line='Route::get('/', function () {'
+
+    - name: edit routes file two and remove closing comment
+      lineinfile: dest=/var/www/html/myapp/routes/web.php regexp='^\}\);\*' line='});'
+
+    - name: create laravel apache conf file
+      copy:
+        dest: "/etc/apache2/sites-available/laravel.conf"
+        content: |
+          <VirtualHost *:80>
+                  ServerAdmin webmaster@{{server_ip}}
+                  ServerName {{server_ip}}
+                  Redirect permanent / https://altschlaravexampro.ml/
+                  DocumentRoot /var/www/html/myapp/public
+                  <Directory /var/www/html/myapp/>
+                          AllowOverride All
+                          Require all granted
+                  </Directory>
+                  ErrorLog ${APACHE_LOG_DIR}/error.log
+                  CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+
+    - name: Disable default apache page
+      shell: a2dissite 000-default.conf
+
+    - name: Enable Laravel homepage
+      shell: a2ensite laravel.conf
+
+    - name: Rewrite configuration
+      shell: a2enmod rewrite
+
+    - name: Set up virtual environment
+      shell:
+        cmd: |
+          python3 -m venv /opt/certbot/
+          /opt/certbot/bin/pip install --upgrade pip
+
+    - name: Install certbot
+      shell:
+        cmd: |
+          /opt/certbot/bin/pip install certbot certbot-apache
+          ln -s /opt/certbot/bin/certbot /usr/bin/certbot
+
+    - name: Create SSL Certificate
+      command: "certbot --apache certonly -n --agree-tos --email {{ certbot_admin_email }} -d {{ inventory_hostname_one }}"
+      args:
+        creates: "{{ certbot_output_dir }}"
+
+    - name: Enable ssl module
+      shell: a2enmod rewrite ssl security2
+
+    - name: set permissions for Laravel storage folder
+      file:
+        path: /var/www/html/myapp/storage
+        state: directory
+        recurse: yes
+        mode: '0755'
+        owner: "{{new_app_user}}"
+        group: "{{new_app_group}}"
+      become: yes
+
+    - name: create laravel apache conf file
+      lineinfile:
+        path: "/etc/apache2/sites-available/laravel.conf"
+        line: |
+
+          <IfModule mod_ssl.c>
+          <VirtualHost *:443>
+                ServerName {{server_ip}}
+                ServerAlias www.altschlaravexampro.ml
+                ServerAdmin webmaster@{{server_ip}}
+
+                DocumentRoot /var/www/html/myapp/public
+                <Directory /var/www/html/myapp/public>
+                    Options -Indexes +FollowSymLinks
+                    DirectoryIndex index.php
+                    AllowOverride All
+                    Require all granted
+                </Directory>
+
+                SSLEngine on
+                SSLProtocol -all +TLSv1.2
+                SSLCertificateFile {{certbot_output_dir}}/fullchain.pem
+                SSLCertificateKeyFile {{certbot_output_dir}}/privkey.pem
+                Include /etc/letsencrypt/options-ssl-apache.conf
+          </VirtualHost>
+          </IfModule>
+
+    - name: Reload apache2 service
+      service:
+        name: apache2
+        state: reloaded
+        enabled: yes
+
+    - name: Transfer the script
+      copy: src=postgresql_inst.sh dest=/tmp/ mode=0777
+
+    - name: Execute the script
+      shell: ./postgresql_inst.sh
+      args:
+        chdir: /tmp/
+      register: output
+
+    - name: Print return information from the previous task
+      ansible.builtin.debug:
+        var: output.stdout_lines
