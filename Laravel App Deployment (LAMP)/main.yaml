@@ -287,6 +287,16 @@
       args:
         creates: "{{ certbot_output_dir }}"
 
+    - name: Create cronjob to autorenew every 3 days
+      cron: 
+        name: "Renew SSL Certificate"
+        user: "root"
+        minute: "0"
+        hour: "0"
+        weekday: "*/3"
+        job: --apache certonly -n --force-renewal --agree-tos --email {{ certbot_admin_email }} -d {{ inventory_hostname_one }}"
+
+
     - name: Enable ssl module
       shell: a2enmod rewrite ssl security2
 
