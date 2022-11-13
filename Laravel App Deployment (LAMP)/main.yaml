@@ -1,7 +1,7 @@
 ---
 - name: Playbook to fully deploy a Laravel application
-  hosts: deployment_Server
-  remote_user: {{remoteuser}}
+  hosts: web_servers
+  remote_user: "{{ remoteuser }}"
   become: true
   tasks:
 
@@ -24,16 +24,19 @@
         - lsb-release
         - gnupg2
 
+    - name: Check if php repo exists on server
+      shell: cat /etc/apt/sources.list.d/sury-php.list
+      register: package_check   
+
     - name: Add php packages
       shell:
         cmd: |
           echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
-          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/sury-php.list
           curl -fsSL  https://packages.sury.org/php/apt.gpg| sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sury-keyring.gpg
+      when: package_check.rc != ""
 
     - name: Update packages
       apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
-
 
     - name: Install Apache, PHP7 and dependencies
       apt: name={{ item }} update_cache=yes state=latest
@@ -172,7 +175,7 @@
       become: yes
 
     - name: set APP_URL
-      lineinfile: dest=/var/www/html/myapp/.env regexp='^APP_URL=' line=APP_URL=http://54.84.77.133
+      lineinfile: dest=/var/www/html/myapp/.env regexp='^APP_URL=' line=APP_URL=http://{{server_ip}}
       become: yes
 
     - name: set DB_CONNECTION
@@ -209,7 +212,6 @@
       become_user: www-data
       args:
         chdir: /var/www/html/myapp/
-
 
     - name: Run artisan key generate
       shell: php artisan key:generate
@@ -295,7 +297,6 @@
         hour: "0"
         weekday: "*/3"
         job: --apache certonly -n --force-renewal --agree-tos --email {{ certbot_admin_email }} -d {{ inventory_hostname_one }}"
-
 
     - name: Enable ssl module
       shell: a2enmod rewrite ssl security2
