@@ -1,0 +1,25 @@
+#INSTRUCTIONS
+
+This playbook sets up a LAMP server to deploy a Laravel application.
+
+Core elements include Apache, MySQL(MariaDB), PHP, Certbot forr SSL and a Postgresql installation and setup.
+
+
+
+The following variables are required to make this playbook work. Adding them here to avoid stress down the line.
+
+remoteuser
+db_user
+db_pass
+db_name
+db_host
+new_app_user
+new_app_group
+server_ip
+inventory_hostname_one
+inventory_hostname_two
+certbot_admin_email
+certbot_output_dir
+
+
+P.S The server_ip variable should advisably be a public IP.
