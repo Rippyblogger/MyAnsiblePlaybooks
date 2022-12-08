@@ -12,8 +12,8 @@
       timezone:
         name: Africa/Lagos
 
-    # - name: Upgrade all packages on servers
-    #   apt: upgrade=dist force_apt_get=yes
+    - name: Upgrade all packages on servers
+      apt: upgrade=dist force_apt_get=yes
 
     - name: Install ca-certificates apt-transport-https software-properties-common
       apt: name={{ item }} update_cache=yes state=latest
