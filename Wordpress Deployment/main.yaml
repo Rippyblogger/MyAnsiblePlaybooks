@@ -137,16 +137,35 @@
         name: mariadb
         state: restarted
 
-    
     - name: Install Wordpress 
       shell:
         cmd: |
-          curl -O  https://wordpress.org/latest.tar.gz
-          tar -xvf latest.tar.gz && rm latest.tar.gz
+          git clone https://github.com/inspireui/mstore.git
           mkdir /var/www/html/myapp
-          cp -r wordpress/* /var/www/html/myapp
+          cp -rf mstore/wordpress/. /var/www/html/myapp
       args:
         chdir: /tmp
+
+    - name: Import database
+      mysql_db:
+        name: "{{db_name}}"
+        state: import
+        target: "/tmp/mstore/database/{{db_dump}}"
+        login_password: "{{db_pass}}"
+        login_user: "{{db_user}}"
+
+
+    - name: Update live urls in databases
+      community.mysql.mysql_query:
+        login_db: '{{db_name}}'
+        login_password: "{{db_pass}}"
+        login_user: "{{db_user}}"
+        query:
+        - UPDATE wp_options SET option_value = replace (option_value , 'http://localhost' , 'http://{{server_ip}}') WHERE option_name = 'home' OR option_name = 'siteurl';
+        - UPDATE wp_posts SET guid = replace (guid , 'http://localhost' , 'http://{{server_ip}}')
+        - UPDATE wp_posts SET post_content = replace (post_content , 'http://localhost' , 'http://{{server_ip}}')
+        - UPDATE wp_postmeta SET meta_value = replace  (meta_value , 'http://localhost' , ''http://{{server_ip}}')
+        single_transaction: yes
 
 
     - name: take ownership of myapp folder
@@ -159,28 +178,25 @@
         state: directory
       become: yes
 
-
-    - name: rename config file
-      copy:
-        src: /var/www/html/myapp/wp-config-sample.php
-        remote_src: yes
-        dest: /var/www/html/myapp/wp-config.php
-        owner: "{{ new_app_user }}"
-        group: "{{ new_app_group }}"
-        mode: '0644'
-      become: yes
-
     - name: set DB_NAME
-      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp='database_name_here' line="define( 'DB_NAME', '{{db_name}}' );"
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_NAME'" line="define( 'DB_NAME', '{{db_name}}' );"
 
     - name: set DB_USERNAME
-      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp='username_here' line="define( 'DB_USER', '{{db_user}}' );"
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_USER'" line="define( 'DB_USER', '{{db_user}}' );"
 
     - name: set DB_PASSWORD
-      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp='password_here' line="define( 'DB_PASSWORD', '{{db_pass}}' );"
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_PASSWORD'" line="define( 'DB_PASSWORD', '{{db_pass}}' );"
 
     - name: set DB_HOST
-      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp='DB_HOST=' line="define( 'DB_HOST', '{{db_host}}' );"
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_HOST'" line="define( 'DB_HOST', '{{db_host}}' );"
+
+    - name: add WP_HOME and siteURL
+      lineinfile:
+        path: "/var/www/html/myapp/wp-config.php"
+        line: |
+          define('WP_HOME','http://{{server_ip}}'); 
+          
+          define('WP_SITEURL','http://{{server_ip}}');
 
     - name: create wordpress apache conf file
       copy:
@@ -246,7 +262,7 @@
           <IfModule mod_ssl.c>
           <VirtualHost *:443>
                 ServerName {{server_ip}}
-                ServerAlias {{inventory_hostname_two}}
+                ServerAlias {{www.altschlaravexampro.ml}}
                 ServerAdmin webmaster@{{server_ip}}
 
                 DocumentRoot /var/www/html/myapp/public
