@@ -6,45 +6,7 @@
   remote_user: "{{ remoteuser }}"
   become: true
   tasks:
-
     - name: Update apt repo and cache on deployment server
-      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
-
-    - name: Change timezone
-      timezone:
-        name: Indian/Mauritius
-
-    # - name: Upgrade all packages on servers
-    #   apt: upgrade=dist force_apt_get=yes
-
-    - name: Install ca-certificates apt-transport-https software-properties-common
-      apt: name={{ item }} update_cache=yes state=latest
-      with_items:
-        - ca-certificates
-        - apt-transport-https
-        - software-properties-common
-        - lsb-release
-        - gnupg2
-
-    - name: Check if php repo exists on server
-      shell: | 
-        if [[ -f /etc/apt/sources.list.d/sury-php.list ]];then 
-          cat /etc/apt/sources.list.d/sury-php.list
-        fi
-      register: package_check   
-
-    - name: Print return information from the previous task
-      ansible.builtin.debug:
-        var: package_check.rc
-
-    - name: Add php packages
-      shell:
-        cmd: |
-          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
-          curl -fsSL  https://packages.sury.org/php/apt.gpg| sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sury-keyring.gpg
-      when: package_check.rc != 0
-
-    - name: Update packages
       apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
 
     - name: Install Apache, PHP7 and dependencies
@@ -74,6 +36,8 @@
         - libaugeas0
         - libapache2-mod-security2
         - firewalld
+        - mariadb-server
+        - python3-pymysql
 
     - name: enable firewalld service
       service:
@@ -135,15 +99,15 @@
         state: started
         enabled: yes
 
-    - name: Installing Mysql  and dependencies
-      package:
-       name: "{{item}}"
-       state: present
-       update_cache: yes
-      loop:
-        - mariadb-server
-        - python3-pymysql
-      become: yes
+    # - name: Installing Mysql  and dependencies
+    #   package:
+    #    name: "{{item}}"
+    #    state: present
+    #    update_cache: yes
+    #   loop:
+    #     - mariadb-server
+    #     - python3-pymysql
+    #   become: yes
 
     - name: start and enable mysql service
       service:
@@ -151,90 +115,22 @@
         state: started
         enabled: yes
 
-    - name: Bind mysql to current server ip
-      ansible.builtin.lineinfile:
-        dest: /etc/mysql/my.cnf
-        state: present
-        line: |
-          [mysqld]
-          #Bind instance to address
-          bind-address = {{server1_ip}}
-
-    - name: Set password for main user
-      mysql_user:
-        name: "{{db_user}}"
-        password: "{{db_pass}}"
-        priv: '*.*:ALL,GRANT'
-        host: "{{db_host}}"
-        login_unix_socket: /var/run/mysqld/mysqld.sock
-        check_implicit_admin: true
-        state: present
-
-    - name: Set password for remote user
-      mysql_user:
-        name: "{{db_user}}"
-        password: "{{db_pass}}"
-        priv: '{{db_host}}.*:ALL,GRANT'
-        host: "{{server2_ip}}"
-        login_unix_socket: /var/run/mysqld/mysqld.sock
-        check_implicit_admin: true
-        state: present
-
-    - name: creating wordpressDB
-      mysql_db:
-        name: "{{db_name}}"
-        login_user: "{{db_user}}"
-        login_password: "{{db_pass}}"
-        state: present
-        login_unix_socket: /run/mysqld/mysqld.sock
-        login_host: "{{db_host}}"
-
-    - name: Restart mysql
-      service:
-        name: mariadb
-        state: restarted
+    - name: Install Wordpress 
+      shell:
+        cmd: |
+          git clone https://github.com/inspireui/mstore.git
+          mkdir /var/www/html/myapp
+          cp -rf mstore/wordpress/. /var/www/html/myapp
+      args:
+        chdir: /tmp
 
     # - name: Install Wordpress 
     #   shell:
     #     cmd: |
-    #       git clone https://github.com/inspireui/mstore.git
     #       mkdir /var/www/html/myapp
     #       cp -rf mstore/wordpress/. /var/www/html/myapp
     #   args:
-    #     chdir: /tmp
-
-    - name: Install Wordpress 
-      shell:
-        cmd: |
-          mkdir /var/www/html/myapp
-          cp -rf mstore/wordpress/. /var/www/html/myapp
-      args:
-        chdir: /home/{{remoteuser}}
-
-
-    - name: Import database
-      mysql_db:
-        name: "{{db_name}}"
-        state: import
-        target: "/home/{{remoteuser}}/mstore/database/{{db_dump}}"
-        login_password: "{{db_pass}}"
-        login_user: "{{db_user}}"
-        login_host: "{{db_host}}"
-
-
-    - name: Update live urls in databases
-      community.mysql.mysql_query:
-        login_db: '{{db_name}}'
-        login_password: "{{db_pass}}"
-        login_user: "{{db_user}}"
-        query:
-        - UPDATE wp_options SET option_value = replace (option_value , 'http://localhost' , 'http://{{server1_ip}}') WHERE option_name = 'home' OR option_name = 'siteurl';
-        - UPDATE wp_posts SET guid = replace (guid , 'http://localhost' , 'http://{{server1_ip}}')
-        - UPDATE wp_posts SET post_content = replace (post_content , 'http://localhost' , 'http://{{server1_ip}}')
-        - UPDATE wp_postmeta SET meta_value = replace  (meta_value , 'http://localhost' , 'http://{{server1_ip}}')
-        single_transaction: yes
-        login_host: "{{server1_ip}}"
-
+    #     chdir: /home/{{remoteuser}}
 
     - name: take ownership of myapp folder
       file:
@@ -262,8 +158,8 @@
       lineinfile:
         path: "/var/www/html/myapp/wp-config.php"
         line: |
-          define('WP_HOME','http://{{server1_ip}}'); 
-          define('WP_SITEURL','http://{{server1_ip}}');
+          define('WP_HOME','http://{{load_balancer_ip}}'); 
+          define('WP_SITEURL','http://{{load_balancer_ip}}');
 
 
     - name: create wordpress apache conf file
@@ -273,7 +169,6 @@
           <VirtualHost *:8080>
                   ServerAdmin webmaster@{{server1_ip}}
                   ServerName {{server1_ip}}
-                  # Redirect permanent / https://altschlaravexampro.ml/
                   DocumentRoot /var/www/html/myapp/
                   <Directory /var/www/html/myapp/>
                           AllowOverride All
@@ -291,41 +186,6 @@
 
     - name: Rewrite configuration
       shell: a2enmod rewrite
-
-    - name: Create new nginx loadbalancer configuration
-      copy:
-        dest: "/etc/nginx/sites-available/wordpresslb"
-        content: |
-          upstream example {
-          least_conn;
-            server {{server1_ip}}:8080;
-          }
-
-          server {
-            listen 80 default_server;
-            listen [::]:80 default_server;
-
-            root /var/www/html/myapp;
-            index index.html index.htm index.php;
-            
-            location / {
-              proxy_pass http://localhost:8080;
-              include /etc/nginx/proxy_params;
-              try_files $uri $uri/ =404;
-            }
-            
-          #	location ~ \.php$ {
-          #		fastcgi_pass unix: /run/php/php7.4-fpm.sock;
-          #		fastcgi_pass 127.0.0.1:9000;
-          #	}
-          }
-
-    - name: Enable wordpresslb configuration
-      shell:
-        cmd: |
-          ln -s /etc/nginx/sites-available/wordpresslb /etc/nginx/sites-enabled/wordpresslb
-          unlink /etc/nginx/sites-enabled/default
-
 
     # - name: Set up virtual environment
     # shell:
@@ -389,8 +249,3 @@
         state: reloaded
         enabled: yes
 
-    - name: Reload nginx config
-      service:
-        name: nginx
-        state: reloaded
-        enabled: yes

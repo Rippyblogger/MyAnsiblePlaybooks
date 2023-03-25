@@ -1,7 +1,7 @@
 ---
 
 - name: Deploy mezzanine on web
-  hosts: web_servers
+  hosts: all_servers
   vars_files:
     - secrets.yml
 
@@ -9,17 +9,52 @@
     - name: Update the apt cache
       apt:
         update_cache: yes
+        force_apt_get: yes
+        cache_valid_time: 3600
+
+    - name: Change timezone
+      timezone:
+        name: Indian/Mauritius
+
+    - name: Install ca-certificates apt-transport-https software-properties-common       
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - ca-certificates
+        - apt-transport-https
+        - software-properties-common
+        - lsb-release
+        - gnupg2
+
+    - name: Check if php repo exists on server
+      shell: | 
+        if [[ -f /etc/apt/sources.list.d/sury-php.list ]];then 
+          cat /etc/apt/sources.list.d/sury-php.list
+        fi
+      register: package_check   
+
+    - name: Print return information from the previous task
+      ansible.builtin.debug:
+        var: package_check.rc
+
+    - name: Add php packages
+      shell:
+        cmd: |
+          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
+          curl -fsSL  https://packages.sury.org/php/apt.gpg| sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sury-keyring.gpg
+      when: package_check.rc != 0
+
+    - name: Update packages
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
 
   roles:
-    - role: mezzanine
-      database_host: "{{ hostvars.db.ansible_enp0s8.ipv4.address}}"
-  
-    - role: nginx
+    - role: apache
+    - role: database
+    - role: loadbalancer_nginx
 
-  post_tasks:
-    - name: Notify Slack that the servers have been updated
-      delegate_to: localhost
-      slack:
-        domain: acme.slack.com
-        token: "{{ slack_token }}"
-        msg: "web server {{ inventory_hostname }} configured."
+  # post_tasks:
+  #   - name: Notify Slack that the servers have been updated
+  #     delegate_to: localhost
+  #     slack:
+  #       domain: acme.slack.com
+  #       token: "{{ slack_token }}"
+  #       msg: "web server {{ inventory_hostname }} configured."
