@@ -1,0 +1,395 @@
+---
+- name: Playbook to fully deploy a Wordpress application
+  hosts: web_servers
+  remote_user: "{{ remoteuser }}"
+  become: true
+  tasks:
+
+    - name: Update apt repo and cache on deployment server
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+    - name: Change timezone
+      timezone:
+        name: Indian/Mauritius
+
+    # - name: Upgrade all packages on servers
+    #   apt: upgrade=dist force_apt_get=yes
+
+    - name: Install ca-certificates apt-transport-https software-properties-common
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - ca-certificates
+        - apt-transport-https
+        - software-properties-common
+        - lsb-release
+        - gnupg2
+
+    - name: Check if php repo exists on server
+      shell: | 
+        if [[ -f /etc/apt/sources.list.d/sury-php.list ]];then 
+          cat /etc/apt/sources.list.d/sury-php.list
+        fi
+      register: package_check   
+
+    - name: Print return information from the previous task
+      ansible.builtin.debug:
+        var: package_check.rc
+
+    - name: Add php packages
+      shell:
+        cmd: |
+          echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/sury-php.list
+          curl -fsSL  https://packages.sury.org/php/apt.gpg| sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/sury-keyring.gpg
+      when: package_check.rc != 0
+
+    - name: Update packages
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+
+    - name: Install Apache, PHP7 and dependencies
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - apache2
+        - libapache2-mod-php
+        - git
+        - php 
+        - php-mysql 
+        - php-curl 
+        - php-gd 
+        - php-mbstring 
+        - php-xml 
+        - php-xmlrpc 
+        - php-soap 
+        - php-intl 
+        - php-zip
+        - zip
+        - unzip
+        - curl
+        - php-curl
+        - acl
+        - openssl
+        - python3
+        - python3-venv
+        - libaugeas0
+        - libapache2-mod-security2
+        - firewalld
+        - nginx
+
+    - name: enable firewalld service
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Add FirewallD rules
+      firewalld:
+        permanent: yes
+        immediate: yes
+        service: "{{ item }}"
+        state: enabled
+      with_items:
+        - http
+        - https
+        - ssh
+        - postgresql
+
+    - name: Add FirewallD rules
+      firewalld:
+        permanent: yes
+        immediate: yes
+        port: 8080/tcp
+        state: enabled
+
+    - name: Add FirewallD source ip address rules for new Mariadb zone
+      firewalld:
+        permanent: yes
+        immediate: yes
+        port: 3306/tcp
+        state: enabled
+
+    - name: Add FirewallD source ip address rules for new Mariadb zone
+      firewalld:
+        permanent: yes
+        immediate: yes
+        source: "{{server2_ip}}"
+        state: enabled
+
+    - name: Set up ports config file
+      copy:
+        dest: "/etc/apache2/ports.conf"
+        content: |
+          Listen 8080
+
+          <IfModule ssl_module>
+            Listen 443
+          </IfModule>
+
+          <IfModule mod_gnutls.c>
+            Listen 443
+          </IfModule>
+
+
+    - name: start and enable apache2 service
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Installing Mysql  and dependencies
+      package:
+       name: "{{item}}"
+       state: present
+       update_cache: yes
+      loop:
+        - mariadb-server
+        - python3-pymysql
+      become: yes
+
+    - name: start and enable mysql service
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Bind mysql to current server ip
+      ansible.builtin.lineinfile:
+        dest: /etc/mysql/my.cnf
+        state: present
+        line: |
+          [mysqld]
+          #Bind instance to address
+          bind-address = {{server1_ip}}
+
+    - name: Set password for main user
+      mysql_user:
+        name: "{{db_user}}"
+        password: "{{db_pass}}"
+        priv: '*.*:ALL,GRANT'
+        host: "{{db_host}}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        check_implicit_admin: true
+        state: present
+
+    - name: Set password for remote user
+      mysql_user:
+        name: "{{db_user}}"
+        password: "{{db_pass}}"
+        priv: '{{db_host}}.*:ALL,GRANT'
+        host: "{{server2_ip}}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        check_implicit_admin: true
+        state: present
+
+    - name: creating wordpressDB
+      mysql_db:
+        name: "{{db_name}}"
+        login_user: "{{db_user}}"
+        login_password: "{{db_pass}}"
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+        login_host: "{{db_host}}"
+
+    - name: Restart mysql
+      service:
+        name: mariadb
+        state: restarted
+
+    # - name: Install Wordpress 
+    #   shell:
+    #     cmd: |
+    #       git clone https://github.com/inspireui/mstore.git
+    #       mkdir /var/www/html/myapp
+    #       cp -rf mstore/wordpress/. /var/www/html/myapp
+    #   args:
+    #     chdir: /tmp
+
+    - name: Install Wordpress 
+      shell:
+        cmd: |
+          mkdir /var/www/html/myapp
+          cp -rf mstore/wordpress/. /var/www/html/myapp
+      args:
+        chdir: /home/{{remoteuser}}
+
+
+    - name: Import database
+      mysql_db:
+        name: "{{db_name}}"
+        state: import
+        target: "/home/{{remoteuser}}/mstore/database/{{db_dump}}"
+        login_password: "{{db_pass}}"
+        login_user: "{{db_user}}"
+        login_host: "{{db_host}}"
+
+
+    - name: Update live urls in databases
+      community.mysql.mysql_query:
+        login_db: '{{db_name}}'
+        login_password: "{{db_pass}}"
+        login_user: "{{db_user}}"
+        query:
+        - UPDATE wp_options SET option_value = replace (option_value , 'http://localhost' , 'http://{{server1_ip}}') WHERE option_name = 'home' OR option_name = 'siteurl';
+        - UPDATE wp_posts SET guid = replace (guid , 'http://localhost' , 'http://{{server1_ip}}')
+        - UPDATE wp_posts SET post_content = replace (post_content , 'http://localhost' , 'http://{{server1_ip}}')
+        - UPDATE wp_postmeta SET meta_value = replace  (meta_value , 'http://localhost' , 'http://{{server1_ip}}')
+        single_transaction: yes
+        login_host: "{{server1_ip}}"
+
+
+    - name: take ownership of myapp folder
+      file:
+        path: /var/www/html/myapp
+        owner: "{{new_app_user}}"
+        group: "{{new_app_group}}"
+        mode: '0755'
+        recurse: yes
+        state: directory
+      become: yes
+
+    - name: set DB_NAME
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_NAME'" line="define( 'DB_NAME', '{{db_name}}' );"
+
+    - name: set DB_USERNAME
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_USER'" line="define( 'DB_USER', '{{db_user}}' );"
+
+    - name: set DB_PASSWORD
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_PASSWORD'" line="define( 'DB_PASSWORD', '{{db_pass}}' );"
+
+    - name: set DB_HOST
+      lineinfile: dest=/var/www/html/myapp/wp-config.php regexp="define\(\'DB_HOST'" line="define( 'DB_HOST', '{{db_host}}' );"
+
+    - name: add WP_HOME and siteURL
+      lineinfile:
+        path: "/var/www/html/myapp/wp-config.php"
+        line: |
+          define('WP_HOME','http://{{server1_ip}}'); 
+          define('WP_SITEURL','http://{{server1_ip}}');
+
+
+    - name: create wordpress apache conf file
+      copy:
+        dest: "/etc/apache2/sites-available/wordpress.conf"
+        content: |
+          <VirtualHost *:8080>
+                  ServerAdmin webmaster@{{server1_ip}}
+                  ServerName {{server1_ip}}
+                  # Redirect permanent / https://altschlaravexampro.ml/
+                  DocumentRoot /var/www/html/myapp/
+                  <Directory /var/www/html/myapp/>
+                          AllowOverride All
+                          Require all granted
+                  </Directory>
+                  ErrorLog ${APACHE_LOG_DIR}/error.log
+                  CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+
+    - name: Disable default apache page
+      shell: a2dissite 000-default.conf
+
+    - name: Enable wordpress homepage
+      shell: a2ensite wordpress.conf
+
+    - name: Rewrite configuration
+      shell: a2enmod rewrite
+
+    - name: Create new nginx loadbalancer configuration
+      copy:
+        dest: "/etc/nginx/sites-available/wordpresslb"
+        content: |
+          upstream example {
+          least_conn;
+            server {{server1_ip}}:8080;
+          }
+
+          server {
+            listen 80 default_server;
+            listen [::]:80 default_server;
+
+            root /var/www/html/myapp;
+            index index.html index.htm index.php;
+            
+            location / {
+              proxy_pass http://localhost:8080;
+              include /etc/nginx/proxy_params;
+              try_files $uri $uri/ =404;
+            }
+            
+          #	location ~ \.php$ {
+          #		fastcgi_pass unix: /run/php/php7.4-fpm.sock;
+          #		fastcgi_pass 127.0.0.1:9000;
+          #	}
+          }
+
+    - name: Enable wordpresslb configuration
+      shell:
+        cmd: |
+          ln -s /etc/nginx/sites-available/wordpresslb /etc/nginx/sites-enabled/wordpresslb
+          unlink /etc/nginx/sites-enabled/default
+
+
+    # - name: Set up virtual environment
+    # shell:
+    #   cmd: |
+    #     python3 -m venv /opt/certbot/
+    #     /opt/certbot/bin/pip install --upgrade pip
+
+    # - name: Install certbot
+    #   shell:
+    #     cmd: |
+    #       /opt/certbot/bin/pip install certbot certbot-apache
+    #       ln -s /opt/certbot/bin/certbot /usr/bin/certbot
+
+    # - name: Create SSL Certificate
+    #   command: "certbot --apache certonly -n --agree-tos --email {{ certbot_admin_email }} -d {{ inventory_hostname_one }}"
+    #   args:
+    #     creates: "{{ certbot_output_dir }}"
+
+    # - name: Create cronjob to autorenew every 3 days
+    #   cron: 
+    #     name: "Renew SSL Certificate"
+    #     user: "root"
+    #     minute: "0"
+    #     hour: "0"
+    #     weekday: "*/3"
+    #     job: --apache certonly -n --force-renewal --agree-tos --email {{ certbot_admin_email }} -d {{ inventory_hostname_one }}"
+
+    # - name: Enable ssl module
+    #   shell: a2enmod rewrite ssl security2
+
+    # - name: create wordpress apache conf file
+    #   lineinfile:
+    #     path: "/etc/apache2/sites-available/wordpress.conf"
+    #     line: |
+
+    #       <IfModule mod_ssl.c>
+    #       <VirtualHost *:443>
+    #             ServerName {{server1_ip}}
+    #             ServerAlias {{www.altschlaravexampro.ml}}
+    #             ServerAdmin webmaster@{{server1_ip}}
+
+    #             DocumentRoot /var/www/html/myapp/public
+    #             <Directory /var/www/html/myapp/public>
+    #                 Options -Indexes +FollowSymLinks
+    #                 DirectoryIndex index.php
+    #                 AllowOverride All
+    #                 Require all granted
+    #             </Directory>
+
+    #             SSLEngine on
+    #             SSLProtocol -all +TLSv1.2
+    #             SSLCertificateFile {{certbot_output_dir}}/fullchain.pem
+    #             SSLCertificateKeyFile {{certbot_output_dir}}/privkey.pem
+    #             Include /etc/letsencrypt/options-ssl-apache.conf
+    #       </VirtualHost>
+    #       </IfModule>
+
+    - name: Reload apache2 service
+      service:
+        name: apache2
+        state: reloaded
+        enabled: yes
+
+    - name: Reload nginx config
+      service:
+        name: nginx
+        state: reloaded
+        enabled: yes

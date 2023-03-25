@@ -1,0 +1,5 @@
+---
+- hosts: localhost
+  remote_user: root
+  roles:
+    - /home/parallels/MyAnsiblePlaybooks/Wordpress Deployment/roles/load_balancer_nginx

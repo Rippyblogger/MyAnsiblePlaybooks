@@ -1,2 +1,3 @@
 /group_vars/all
 .env
+roles/**/vars/main.yml
